@@ -1,0 +1,321 @@
+$rg = @{
+    Name = 'SEA-RG'
+    Location = 'southeastasia'
+}
+New-AzResourceGroup @rg
+
+$rg1 = @{
+    Name = 'EAST-RG'
+    Location = 'EASTUS'
+}
+New-AzResourceGroup @rg1
+
+
+
+$vnet = @{
+    Name = 'SeaVNet'
+    ResourceGroupName = 'SEA-RG'
+    Location = 'southeastasia'
+    AddressPrefix = '172.1.0.0/16'    
+}
+$virtualNetwork = New-AzVirtualNetwork @vnet
+
+
+$Eastvnet = @{
+    Name = 'EASTV'
+    ResourceGroupName = 'EAST-RG'
+    Location = 'EASTUS'
+    AddressPrefix = '172.101.0.0/16'    
+}
+$virtualNetwork1 = New-AzVirtualNetwork @Eastvnet
+
+$EastSubnet = @{
+    Name = 'east-subnet'
+    VirtualNetwork = $virtualNetwork1
+    AddressPrefix = '172.101.1.0/24'
+}
+$subnetConfig = Add-AzVirtualNetworkSubnetConfig @EastSubnet
+
+
+$subnet = @{
+    Name = 'websubnet'
+    VirtualNetwork = $virtualNetwork
+    AddressPrefix = '172.1.1.0/24'
+}
+$subnetConfig = Add-AzVirtualNetworkSubnetConfig @subnet
+
+$subnet = @{
+    Name = 'mgmtsubnet'
+    VirtualNetwork = $virtualNetwork
+    AddressPrefix = '172.1.2.0/24'
+}
+$subnetConfig = Add-AzVirtualNetworkSubnetConfig @subnet
+
+$virtualNetwork | Set-AzVirtualNetwork
+
+
+
+#########WEB NSG###############
+
+Creating NSG:
+
+MNGNSG:
+
+$rule1 = New-AzNetworkSecurityRuleConfig -Name rdp-rule -Description "Allow RDP" `
+    -Access Allow -Protocol Tcp -Direction Inbound -Priority 100 -SourceAddressPrefix `
+    Internet -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 3389
+
+$rule2 = New-AzNetworkSecurityRuleConfig -Name web-rule -Description "Allow HTTP" `
+    -Access Allow -Protocol Tcp -Direction Inbound -Priority 101 -SourceAddressPrefix `
+    Internet -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 80
+
+$rule3 = New-AzNetworkSecurityRuleConfig -Name web-rule1 -Description "Allow HTTPS" `
+    -Access Allow -Protocol Tcp -Direction Inbound -Priority 102 -SourceAddressPrefix `
+    Internet -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 443
+
+
+$nsg = New-AzNetworkSecurityGroup -ResourceGroupName SEA-RG -Location southeastasia -Name `
+    "MNGNSG" -SecurityRules $rule1,$rule2,$rule3
+
+
+
+
+WebNSG: 
+
+
+$rule1 = New-AzNetworkSecurityRuleConfig -Name rdp-rule -Description "Allow RDP" `
+    -Access Allow -Protocol Tcp -Direction Inbound -Priority 100 -SourceAddressPrefix `
+    Internet -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 3389
+
+$rule2 = New-AzNetworkSecurityRuleConfig -Name web-rule -Description "Allow HTTP" `
+    -Access Allow -Protocol Tcp -Direction Inbound -Priority 101 -SourceAddressPrefix `
+    Internet -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 80
+
+$rule3 = New-AzNetworkSecurityRuleConfig -Name web-rule1 -Description "Allow HTTPS" `
+    -Access Allow -Protocol Tcp -Direction Inbound -Priority 102 -SourceAddressPrefix `
+    Internet -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 443
+
+$rule4 = New-AzNetworkSecurityRuleConfig -Name LB-rule -Description "Allow LB" `
+    -Access Allow -Protocol Tcp -Direction Inbound -Priority 103 -SourceAddressPrefix `
+    AzureLoadBalancer -SourcePortRange * -DestinationAddressPrefix VirtualNetwork -DestinationPortRange *
+
+
+$nsg = New-AzNetworkSecurityGroup -ResourceGroupName SEA-RG -Location southeastasia -Name `
+    "WebSG" -SecurityRules $rule1,$rule2,$rule3,$rule4
+
+
+EASTUSNSG:
+
+$rule1 = New-AzNetworkSecurityRuleConfig -Name rdp-rule -Description "Allow RDP" `
+    -Access Allow -Protocol Tcp -Direction Inbound -Priority 100 -SourceAddressPrefix `
+    Internet -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 3389
+
+$rule2 = New-AzNetworkSecurityRuleConfig -Name web-rule -Description "Allow HTTP" `
+    -Access Allow -Protocol Tcp -Direction Inbound -Priority 101 -SourceAddressPrefix `
+    Internet -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 80
+
+$rule3 = New-AzNetworkSecurityRuleConfig -Name web-rule1 -Description "Allow HTTPS" `
+    -Access Allow -Protocol Tcp -Direction Inbound -Priority 102 -SourceAddressPrefix `
+    Internet -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 443
+
+$nsg = New-AzNetworkSecurityGroup -ResourceGroupName EAST-RG-rg -Location EASTUS -Name `
+    "EASTNSG" -SecurityRules $rule1,$rule2,$rule3
+
+
+###############Creating Availability Set#########
+
+New-AzAvailabilitySet `
+   -Location "eastus" `
+   -Name "EastAvailabilitySet" `
+   -ResourceGroupName "SEA-RG" `
+   -Sku aligned `
+   -PlatformFaultDomainCount 2 `
+   -PlatformUpdateDomainCount 2
+
+$cred = Get-Credential
+
+for ($i=1; $i -le 2; $i++)
+{
+    New-AzVm `
+        -ResourceGroupName "SEA-RG" `
+        -Name "VM1$i" `
+        -Location "westus2" `
+        -VirtualNetworkName "SeaVNet" `
+        -SubnetName "websubnet" `
+        -SecurityGroupName "WebNSG" `
+        -PublicIpAddressName "publicIp$i" `
+        -AvailabilitySetName "SCAvailabilitySet" `
+        -Credential $cred
+}
+
+
+###############Load balancer##############
+
+
+$publicip = @{
+    Name = 'myPublicIp'
+    ResourceGroupName = 'SEA-RG'
+    Location = 'southeastasia'
+    Sku = 'Standard'
+    AllocationMethod = 'static'
+    Zone = 1,2,3
+}
+New-AzPublicIpAddress @publicip
+
+
+
+$publicIp = Get-AzPublicIpAddress -Name 'myPublicIP1' -ResourceGroupName 'SEA-RG'
+
+$feip = New-AzLoadBalancerFrontendIpConfig -Name 'myFrontEnd' -PublicIpAddress $publicIp
+
+
+$bepool = New-AzLoadBalancerBackendAddressPoolConfig -Name 'myBackEndPool'
+
+
+$probe = @{
+    Name = 'myHealthProbe'
+    Protocol = 'RDP'
+    Port = '3389'
+    IntervalInSeconds = '360'
+    ProbeCount = '5'
+    RequestPath = '/'
+}
+$healthprobe = New-AzLoadBalancerProbeConfig @probe
+
+
+$lbrule =@{
+    Name = 'myRDPRule'
+    Protocol = 'tcp'
+    FrontendPort = '3389'
+    BackendPort = '3389'
+    IdleTimeoutInMinutes = '15'
+    FrontendIpConfiguration = $feip
+    BackendAddressPool = $bePool
+}
+
+
+$rule = New-AzLoadBalancerRuleConfig @lbrule -EnableTcpReset -DisableOutboundSNAT
+
+
+$loadbalancer = @{
+    ResourceGroupName = 'SEA-RG'
+    Name = 'myLoadBalancer'
+    Location = 'southeastasia'
+    Sku = 'Standard'
+    FrontendIpConfiguration = $feip
+    BackendAddressPool = $bePool
+    LoadBalancingRule = $rule
+    Probe = $healthprobe
+}
+
+New-AzLoadBalancer @loadbalancer
+
+$probe1 = @{
+    Name = 'myHealthProbe1'
+    Protocol = 'RDP'
+    Port = '3389'
+    IntervalInSeconds = '360'
+    ProbeCount = '5'
+    RequestPath = '/'
+}
+$healthprobe = New-AzLoadBalancerProbeConfig @probe1
+
+$lbrule = @{
+    Name = 'MyRDPRule'
+    Protocol = 'tcp'
+    FrontendPort = '3389'
+    BackendPort = '3389'
+    IdleTimeoutInMinutes = '15'
+    FrontendIpConfiguration = $feip
+    BackendAddressPool = $bePool
+
+###############Create VM#######################################
+
+$vm1 = @{
+    ResourceGroupName = 'SEA-RG'
+    Location = 'southeastasia'
+    Name = 'Server1'
+    VirtualNetworkName = 'SeaVNet'
+    SubnetName = 'websubnet'
+}
+New-AzVM @vm1
+
+
+$vm2 = @{
+    ResourceGroupName = 'SEA-RG'
+    Location = 'eastus'
+    Name = 'Server2'
+    VirtualNetworkName = 'SeaVNet'
+    SubnetName = 'websubnet'
+}
+New-AzVM @vm2
+
+
+$vm3 = @{
+    ResourceGroupName = 'EAST-RG'
+    Location = 'EASTUS'
+    Name = 'Server11'
+    VirtualNetworkName = 'EASTVNet'
+    SubnetName = 'eastsubnet'
+}
+New-AzVM @vm3
+
+
+########RecoveryServiceVault#####
+
+Register-AzResourceProvider -ProviderNamespace "Microsoft.RecoveryServices"
+
+New-AzRecoveryServicesVault `
+    -ResourceGroupName "EAST-RG" `
+    -Name "myRecoveryServicesVault" `
+-Location "EastUS"
+
+####Creating the context:####
+
+Get-AzRecoveryServicesVault `
+ -Name "myRecoveryServicesVault" | Set-AzRecoveryServicesVaultContext
+
+###Setting the policy:###
+
+ $policy = Get-AzRecoveryServicesBackupProtectionPolicy     -Name "DefaultPolicy"
+
+###Enabling the Backup:###
+
+Enable-AzRecoveryServicesBackupProtection `
+    -ResourceGroupName "EAST-RG" `
+    -Name "Server11" `
+    -Policy $policy
+
+####Monitor the Jobs as below####:
+
+Get-AzRecoveryservicesBackupJob
+
+###########V-Net Peering ###########
+
+
+
+$vnet1 = Get-AzVirtualNetwork -Name SeaVNet -ResourceGroupName SEA-RG
+$vnet2 = Get-AzVirtualNetwork -Name EASTV -ResourceGroupName EAST-RG
+
+Add-AzVirtualNetworkPeering -Name SEAtoEUS -VirtualNetwork $vnet1 -RemoteVirtualNetworkId $vnet2.Id
+Add-AzVirtualNetworkPeering -Name EUStoSEA -VirtualNetwork $vnet2 -RemoteVirtualNetworkId $vnet1.Id
+
+### storageacc#####
+
+New-AzStorageAccount -ResourceGroupName  EAST-RG`
+  -Name euszrs12 `
+  -Location eastus`
+  -SkuName Standard_ZRS `
+  -Kind StorageV2
+
+New-AzStorageAccount -ResourceGroupName  SEA-RG`
+  -Name euszrs13 `
+  -Location southasia `
+  -SkuName Standard_GRS `
+  -Kind StorageV2
+
+
+
+
+
+
